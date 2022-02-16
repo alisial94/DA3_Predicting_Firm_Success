@@ -47,6 +47,7 @@ data <- read_csv("https://raw.githubusercontent.com/alisial94/DA3_Predicting_Fir
 glimpse(data)
 skim(data)
 
+
 to_filter <- sapply(data, function(x) sum(is.na(x)))
 sort(to_filter[to_filter > 0])
 
