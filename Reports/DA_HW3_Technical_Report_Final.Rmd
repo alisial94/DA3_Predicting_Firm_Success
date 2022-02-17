@@ -1,0 +1,243 @@
+---
+title: "Data Analysis 3 - Assignment 3 - Technical Report"
+subtitle: "Predicting Firm Success"
+author : "Ali Sial & Rauhan Nazir"
+date: "2/10/2022"
+output: 
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# ------------------------------------------------------------------------------------------------------
+#### SET UP
+#rm(list=ls())
+
+
+# Import libraries
+library(haven)
+library(glmnet)
+library(purrr)
+library(margins)
+library(skimr)
+library(kableExtra)
+library(Hmisc)
+library(cowplot)
+library(gmodels) 
+library(lspline)
+library(sandwich)
+library(modelsummary)
+library(tidyverse)
+library(rattle)
+library(caret)
+library(pROC)
+library(ranger)
+library(rpart)
+library(partykit)
+library(rpart.plot)
+library(viridis)
+
+
+
+```
+
+## Introduction and Process Overview
+
+The purpose of this assignment was to predict whether a firm will be a fast growing one or not. We defined our target variable as a **binary one**, which took the value of 1 if the firm had a fast growth and 0 otherwise. The main steps that we took to achieve this **Classification** was to firstly to get a set of predicted probabilities, which were functions of the predictors and then converted those predicted probabilities into predicted class by applying an optimal classification threshold. This conversion was only possible through a **loss function**, which is the sum of losses both due to the false positives and false negatives. The approach we took was by cross-validation, together with finding the best model for predicting probabilities. The models that we used were Logit, Logit LASSO, and Random Forest models with 5-fold cross validation and the criteria to evaluate the model performance was based on RMSE & AUC.
+
+The ultimate goal behind predicting and identifying the fast growth firms was to help Investment managers in identifying and cashing in on the opportunities where the returns can be maximized. It was important for us to decide how we were going to define and classify a fast-growing firm. We used the value of Compound Annual Growth Rate (CAGR) to classify fast-growth companies vs non-fast growth companies, where companies with a CAGR of 40% or more in sales in 2 years were put in the fast-growing category. The entire code for this analysis can be accessed directly via our **[GitHub Repository](https://github.com/alisial94/DA3_Predicting_Firm_Success)** (please click to access the link).
+
+
+## Data Selection
+
+The data set that we are using for this exercise is related to the set of firms in a European country which was compiled by Bisnode which have been added to our **[GitHub](https://github.com/alisial94/DA3_Predicting_Firm_Success/blob/main/Data/Raw/cs_bisnode_panel.csv)** (click to access the link) and can be called from there directly. However, we had to do intensive cleaning and label engineering, taking conscious decisions to make sure that the data we fed into the models was in the desired form, and the quality and accuracy of the models was not compromised in any way (Garbage in Garbage out). The first step was to see whether the data set had any missing values and drop those which had more than 200,000 missing values, as they won’t help much in predicting the target variable. These columns namely were “COGS”, “finished_prod”, “net_dom_sales”, “net_exp_sales”, “wages” and “D”.
+
+The initial data set had data from 2005 to 2016, but we narrowed it down to 2010 till 2015. One of the most important predictors for predicting the growth of the company is the sales or revenue they are generating and how the sales are changing year on year, so we decided to include the variables that portrays this information. We found out that the data included some negative sales numbers, which shouldn’t be possible. We dealt with them by replacing those values with just a 0, after which we also included the log values of sales and sales in millions, which could be used for easier interpretation. To make sure that the actual growth trend was being reflected we decided to compute CAGR based on 2 years data rather than 1, so that the temporary fluctuations in the growth can be accounted for, and we created a dummy variable for this. We could have also taken a longer time span, however, there could have been a trade-off with the accuracy of the prediction results, as a longer time span would have meant that it would have been more difficult to predict true classifications.
+
+Moreover, there was no point to in keeping the firms that were not alive or still not operational, so we filtered out the firms that had sales equals to 0, assuming that the firms which are making no sales are not operational now. Another decision we took was to include firms that had a revenue greater than 1000 euros and less than 10M euros, as values outside of that range are rare and could have been due to some human error, directing our focus primarily on small and mid-sized companies.
+
+Finally, after all the filters were applied on the data set and running the prediction models, the data was divided into 2 subsets, Manufacturing and Services, which were then divided into training and holdout samples to run the same analysis to compare the results of the main predictions with the individual subsets of manufacturing and services datasets.
+
+
+## Data Engineering
+
+As the Sales variable is one of the key predictors, we checked whether the distribution of absolute or the log values of sales resembled that of a normal distribution. The distribution of the absolute values was skewed, hence we decided to keep the log of sales, which was used in the predictive models that we created. After that we turned our attention to the financial variables. Since the size of the firms was different, it made more sense to normalize all the balance sheet values by dividing them with the total assets of a firm (The total assets were a cumulation of intangible assets, current assets, and fixed assets) and dividing by the sales for the income statement variables. Another issue with financial variables was that there were a lot of negative values, which do not make sense in real life, hence what we did was to replace them with 0s and create a flag variable for each variable. The variation in these variables was checked and only those were kept that had variation in them, as otherwise they would serve no purpose in the prediction.
+
+Another variable that we wanted to incorporate in the models was the age of the firm. This was calculated by subtracting the current year of the observation and the founding year. Furthermore, several similar industries were clubbed together in a new column which served the purpose of decreasing the number of levels. Moreover, we also created flag variables to identify the CEOs ages, where it took the value of low if the age was less than 25, high, if it was greater than 75 and finally missing for the instance if came out to be NA. Instead of using a single approach for dealing with missing values for all the variables, we used a sense check to see what approach made more sense. For instance, the missing values in the labor average column were replace with the average value, and like other columns, a flag variable was also created so that we can identify those missing values.
+
+After all the data cleaning and engineering, we created several models, and with each model the level of complexity increased in terms of the number of variables. The first model only included the variables which we thought were the most important. Domain knowledge played a key role in deciding these groupings.
+
+
+## Prediction Modeling
+
+As mentioned above we used the division of variables based on the groups to develop out predictions models. In total we had 5 logit models, LASSO and a Random Forest with tuning parameter. To begin running the models, we first divided the datasets in two subsets i.e. training data (80%) and holdout data (20%). This division was consistent for all the 3 different dataset we are evaluating. By that I mean the entire data with all the firms, data with only manufacturing firms and data with only services firms.
+
+After the division the train data was used for 5-fold cross-validations for each model. The models and results are explained ahead.
+
+
+## Probability Logit model
+
+As stated above, we created 5 logit probability models. We decided on not using OLS since with OLS there is a possibility of predicted probabilities returning values grater than 1 or less than zero. This problem is very well handled when using Logit model, therefore, we used that for prediction.
+
+The 5 Logit models were designed in such way that the complexity increased from first model (X1) to fifth model (X5). In this way our X1 was the simplest model and X5 was the most complex model. In the first model we only included 4 major predictors. The second model had 10 predictors in total, that included the 4 predictors from X1 and 6 additional predictors that we thought were next in line for importance. For both these models the variables included were mainly for sales, profit and loss and industry categories. However, for more complex models (X3,X4 and X5), predictors were increased significantly.
+
+Upon defining the variables it was time run them and also perform 5-fold cross validation. To measure the performance of models and select our best model, we used Area Under the Curve (AUC) and the average RMSE for the 5-fold cross validation. The tables provided below shows the 5-fold cross-validated RMSE for the logit models, individually for 3 datasets we are working with. Interpreting the results in the tables, it appears that for the main dataset, model 4 out performed others having an avg. 5-fold cross-validated RMSE of 0.3009. For manufacturing and services, the best logit model for both were model 3 , and the respective RMSE values are 0.3280 and 0.2829.
+
+Next we looked respective AUC for each model for the given datasets. The highest AUC, the better it is. For the main dataset, model 4 had the highest AUC whihc is 0.7155,. Even though the difference with other model's AUC is not much, based on RMSE value and AUC, since both are not significantly different for most models, we selected model 4 as the best model for now. With regards to manufacturing dataset, the highest AUC was for model 4, while AUC was highest for model 3 in the services dataset. However, based on the same argument that we used for model selection in main data, we diced to pick model 3 for both manufacturing and services dataset.
+
+
+<p align="center">
+  <img width="460" height="300" src="logit_summary1_f.jpg">
+</p>
+<p align="center">
+  <img width="460" height="300" src="logit_summary1_m.jpg">
+</p>
+<p align="center">
+  <img width="460" height="300" src="logit_summary1_s.jpg">
+</p>
+
+
+
+
+
+## Logit LASSO
+
+For the second type of prediction algorithm, we decided to develop a logit LASSO model with highest number of predictors, so you can say it was the most complex model. The predictors used for LASSO included; interactions terms with industry type and sale of firm, all the dummy variables, variables related to HR of the firm, management related variables, and few more variables that we felt were important to included for the given dataset. The input values provided for LASSO model were, alpha equals 1 and lambda value approximately 0.00464. For the main dataset, LASSO model's the avg. 5-fold cross-validated RMSE came out to be 0.2996, which is slightly lower than the best logit model mentioned above, but when we looked at the AUC for LASSO it was significantly lower compared to the best logit model 4, AUC was 0.687.
+
+Similary, we also ran logit LASSO model on manufacturing and services, the 5-fold cross-validated RMSE was higher than the selected logit for both datasets. The AUC for LASSO in both manufacturing and services performed similar to the results it produced on the main dataset, which is lower than the selected logit models.
+
+
+
+
+## Probability Forest
+
+The last prediction algorithm we used in our analysis is Random Forest with tuning parameters. As we know, usually RF out performs other models, we though it would vital use this model so we can compare the results with our self designed models. Even though it is know as a black box model, since builds a stronger model based on the way it selects the predictors, it is better at identifying non-linear relationships and interactions. The predictors we used RF were similar to that in logit model 4, but without any feature engineering. For this RF the tuning parameters provided are; 5, 6, 7 number of random variables being used at splits and minimum node sizes of 10 and 15 and run it for 500 trees. Based on the best mtry turned out to be 7 which is the number of random variables at splits and 15 as the minimum node size. As we expected for all the datasets, the probability forest returned the lowest 5-fold cross-validated RMSE and the highest AUC. This further validates our claim of RF being the best approach for prediction probabilities as far a the data we are using is concerned. The 5-fold cross validated RMSE for main dataset, manufacturing and services are 0.296, 0.3225  and 0.2784, respectively.
+
+
+<p align="center">
+  <img width="250" height="400" src="rf_summary_f.jpg">
+</p>
+<p align="center">
+  <img width="250" height="400" src="rf_summary_m.jpg">
+</p>
+<p align="center">
+  <img width="250" height="400" src="rf_summary_s.jpg">
+</p>
+
+## ROC Curve
+
+Upon completing the analysis for all the prediction models and the diagnostics, we selected RF model with tuning as best model and we will be using this to further evaluate our predictions. Even though it is a black box model, since the company we work for is result oriented and are not rigid upon which model is being used for the final results. Therefore, we have decided to go ahead with RF for all the three datasets. Using the selected model (RF), we first plotted a Receiver Operating Characteristic (ROC) curves for the models across the datasets using discrete thresholds between 0.05 and 0.75. The ROC curve provided below is for the RF model that ran on the main dataset. Similarly we also looked at the ROC curves for other two datasets, which also had decreasing slow but remained about the 45 degree line. This indicates that our RF model predictions tend to be better compared to other models used in this analysis. 
+
+
+__ROC Curve for Threshold Points__
+<p align="center">
+  <img width="460" height="300" src="roc_1_f.jpg">
+</p>
+
+
+__ROC Curve for AUC__
+<p align="center">
+  <img width="460" height="300" src="roc_2_f.jpg">
+</p>
+
+
+
+## Loss Function
+
+As we know loss function helps us categories our False Positives and False Negatives based on the modeling we have performed previously and helps us evaluate how good our model was at prediction. Furthermore, the loss function also assists in selecting t based on that we pick the optimal threshold. Keeping in mind what loss function does we defined our loss function primarily based on two assumptions. First we looked at the risk-free interest rate an individual receives if they deposits money into an Hungarian Bank. The risk-free rate in the market is about 3.3%. Secondly, we assumed that the if the same amount is invested in a fast-growing company the return would be risk-free rate plus the investment premium, which in our case is around 10%. Additionally, we also assumed that incase the investment is made into a company that was predicted to be a fast-growing and in actuality it wasn’t fast growing the return for the investor would be 0%.
+
+Once we established this criteria, we calculated the opportunity costs associated to relative losses due to false negatives and false positives. To summarize, if the investment is made in a firm which was classified as false positive, the loss would be 3.3% (which could have been made by investing in the return from risk-free rate). Similarly, if the firm was classified as false negative, the loss would be 6.7% (10%- 3.3% since we assume that money would have been deposited in the bank). Thus, the ratio for the cost of FP and FN is 1:2, as we have assumed that our false negative would have twice as much loss compared to false positive. Below provided are the Predictors tables with expected loss for each dataset.
+
+<p align="center">
+  <img width="460" height="300" src="summary_result_f.jpg">
+</p>
+<p align="center">
+  <img width="460" height="300" src="summary_result_m.jpg">
+</p>
+<p align="center">
+  <img width="460" height="300" src="summary_result_s.jpg">
+</p>
+
+
+
+## Optimal Threshold & Classification
+
+Based on the loss function defined above, we calculated the optimal classification threshold using the formula (formula assumes that the model being used is the best model, which might not be correct in reality) and in our case it is 0.33.
+
+As a result, we decided to calculate the optimal threshold individually for each dataset using the loss function. To do this, again we plotted the ROC to identify the optimal threshold for each model. With regards to the main dataset without industry filtration the calculated optimal threshold is 0.32. Similarly for the other datasets which manufacturing and services the optimal threshold are calculated to be 0.32 and 0.24, respectively. Therefore, based on these optimal threshold the predicted probability of a firm that to be classified as fast-growth would be 0.32 and above. The same rule would apply to the other two datasets as well. The graphs below are for the associated optimal threshold and AUC for the defined loss function.
+
+
+__ROC Optimal Threshold for all Firms__
+<p align="center">
+  <img width="460" height="300" src="roc_3_f.jpg">
+</p>
+
+__ROC Optimal Threshold for Manufacturing__
+<p align="center">
+  <img width="460" height="300" src="roc_3_m.jpg">
+</p>
+__ROC Optimal Threshold for Services__
+<p align="center">
+  <img width="460" height="300" src="roc_3_s.jpg">
+</p>
+
+
+
+## Confusion Matrices
+
+The first confusion matrix was built without the loss function, which runs on the majority vote ideology, where it assigns the value of 1 to any predicted probability of 0.5 or above. This is not the optimum threshold as the losses from false positive and false negative are not always symmetric in the real world.
+
+The first confusion matrix that we created was without any loss function, for which the default threshold is 0.5. So, for any predicted probability greater than or equal to 0.5, it will be classified as 1, in our case the firm will be assigned as a fast grower. This approach is flawed for a real-life setting, as it assigns equal value to the losses incurred from false positives and false negatives. This is true for our case as well, as the false negatives will be much costlier for the companies, hence our goal was to minimize false negatives, which is achieved by setting a relatively lower threshold. When the threshold was 0.5, the percentage of false negatives was 10.1%, and percentage of false positives was 0.52%, whereas, with a 0.41 threshold, which was calculated by the function automatically, the percentage of false negatives is 9.24% and percentage of false positives is around 3%.
+
+Based on our loss function, the main model suggests that the company makes loss of around 2,416 Euros per firm and if the company evaluates 1000 firms in a year, the company loses out around 2.819 million Euros. This happened because even though False negatives reduced with decreasing the threshold, but on the flip side False positives also increased significantly, contributing to the loss. However, when we run our predictions on the Manufacturing and Services data sets separately, the models suggests that the company will be able to make savings instead of incurring losses. For the manufacturing data set, when optimal threshold (0.32) was used instead of 0.5, it predicted that the company would save around 1842 Euros per firm and for the Services industry, it predicted that the company would save around 1609 Euros per firm when an optimal threshold (0.24) was used instead of 0.5.
+
+The matrices below are for the 0.5 threshold and optimum threshold for the all the datasets.
+
+<p align="center">
+  <img width="450" height="200" src="cm_f.jpg">
+</p>
+<p align="center">
+  <img width="450" height="200" src="cm_m.jpg">
+</p>
+<p align="center">
+  <img width="450" height="200" src="cm_s.jpg">
+</p>
+
+
+
+
+## Calibration Curve
+
+Calibration curve is one way of seeing whether our model is well calibrated in terms of predicting the probabilities, and in turn is biased or not. The closer the curve is to the 45-degree line, the less biased the model is. In our case we could see that after a certain level of predicted probability, the curve starts to move away from the 45-degree line, meaning that our prediction is biased to some extent. However,
+
+for It to work properly and accurately the sample size needs to be large. In our case this is not the case. So, if provided with the opportunity it will be nice to see what the results come out to be when we have a bigger sample size. Below are the Calibrated curves for the entire data set and the two subsets (Manufacturing and Services)
+
+__Calibration Curve - All Firms__
+
+<p align="center">
+  <img width="460" height="300" src="cali_f.jpg">
+</p>
+
+
+__Calibration Curve - Manufacturing Firms__
+<p align="center">
+  <img width="460" height="300" src="cali_m.jpg">
+</p>
+
+
+__Calibration Curve - Services Firms__
+<p align="center">
+  <img width="460" height="300" src="cali_s.jpg">
+</p>
+
+
+
+
+## Conclusion
+
+After evaluating all the prediction models on various metrics including the RMSE and AUC, we decided that the best model for our case was Random Forest across all of the defined datasets. Moreover, we uncovered that the model performance improved when the data was trained on specific industries separately rather than including all of them together. This is quite intuitive as well, as it is better that our model is used for predicting the performance of firms belonging to a specific industry, rather than trying to predict performance of all kinds of firms using the same model (Jack of all trades, master of none).
+
+Moreover, there are certain improvements that could have been made to increase the quality of models, for instance getting more data and increasing the sample size, which would allow the models to be trained better and help the investment company make better decisions. We could also run models on different time periods than the one we filtered our data down to, which would allow us to check for external validity.
